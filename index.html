@@ -281,7 +281,7 @@
         // NUEVA URL: Base de datos de Fotos de Jugadores
         window.PLAYER_PHOTOS_SHEET_URL = "https://docs.google.com/spreadsheets/d/1dMVtf9pMw_w9emGdQPd9LmOhLRUo-lC-2oPV0v_vu1k/pub?gid=2103774402&single=true&output=csv";
         
-        window.CACHE_VERSION = "v7.0_player_photos";
+        window.CACHE_VERSION = "v7.3_cache_buster_fix";
         window.CACHE_DURATION = 60 * 60 * 1000; 
 
         window.TABS = [
@@ -306,7 +306,7 @@
         window.loadedTeams = [];
         window.teamLeadersInfo = {}; 
         window.globalTeamRegistry = {};
-        window.globalPlayerPhotos = {}; // NUEVO: Registro global de fotos
+        window.globalPlayerPhotos = {}; // Registro global de fotos
         window._activeFetches = {}; 
 
         window.refreshIcons = function() {
@@ -318,6 +318,7 @@
         window.getSafeCache = function(key) { try { return localStorage.getItem(key); } catch(e) { return null; } };
         window.setSafeCache = function(key, val) { try { localStorage.setItem(key, val); } catch(e) {} };
 
+        // Modificamos la funcion proxy para inyectar cache buster si es necesario
         window.fetchWithProxy = async function(url) {
             try { const res = await fetch(url); if (res.ok) return await res.text(); } catch (e) {}
             try { const p1 = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`; const res = await fetch(p1); if (res.ok) return await res.text(); } catch (e) {}
@@ -336,18 +337,22 @@
                     } catch (e) {} 
                 } 
             }
-            if (window._activeFetches[url]) return await window._activeFetches[url];
             
-            const fetchPromise = window.fetchWithProxy(url).then(data => {
+            // CACHE BUSTER REAL PARA EVITAR PROXYS ATASCADOS
+            const finalFetchUrl = forceRefresh ? (url + (url.includes('?') ? '&' : '?') + 'cb=' + Date.now()) : url;
+
+            if (window._activeFetches[finalFetchUrl]) return await window._activeFetches[finalFetchUrl];
+            
+            const fetchPromise = window.fetchWithProxy(finalFetchUrl).then(data => {
                 if (data && data.length > 50) window.setSafeCache(cacheKey, JSON.stringify({ timestamp: Date.now(), data: data })); 
-                delete window._activeFetches[url];
+                delete window._activeFetches[finalFetchUrl];
                 return data;
             }).catch(e => {
-                delete window._activeFetches[url];
+                delete window._activeFetches[finalFetchUrl];
                 throw e;
             });
             
-            window._activeFetches[url] = fetchPromise;
+            window._activeFetches[finalFetchUrl] = fetchPromise;
             return await fetchPromise;
         };
 
@@ -368,19 +373,22 @@
 
         window.parseCSV = function(text) { return text.split('\n').map(l => l.split(',').map(c => c ? c.trim().replace(/^"|"$/g, '') : '')); };
 
-        // NUEVA FUNCIÓN: Descarga las fotos de los jugadores
-        window.loadPlayerPhotos = async function() {
+        // Descarga las fotos de los jugadores
+        window.loadPlayerPhotos = async function(forceRefresh = false) {
             try {
-                let text = await window.fetchWithCache(window.PLAYER_PHOTOS_SHEET_URL);
+                let text = await window.fetchWithCache(window.PLAYER_PHOTOS_SHEET_URL, forceRefresh);
                 let rows = window.parseCSV(text);
                 rows.forEach(r => {
-                    // Ignorar la cabecera, buscamos datos reales en las columnas Equipo(2), Jugador(3), URL(4)
-                    if(r.length >= 5) {
-                        let team = r[2].trim().toUpperCase();
-                        let player = r[3].trim().toUpperCase();
-                        let photoUrl = r[4].trim();
+                    // Buscamos dinámicamente la URL
+                    let urlColIndex = r.findIndex(c => c.includes('drive.google.com'));
+                    let photoUrl = urlColIndex !== -1 ? r[urlColIndex].trim() : (r.length >= 5 ? r[4].trim() : "");
+                    
+                    if(r.length >= 4) {
+                        let team = r[2] ? r[2].trim().toUpperCase() : "";
+                        let player = r[3] ? r[3].trim().toUpperCase() : "";
+                        
                         if(team && player && photoUrl && photoUrl !== "Archivo de Logo") {
-                            // Guardamos la foto cruzando Equipo_Jugador para evitar repetidos de otros equipos
+                            // Guardamos la foto cruzando Equipo_Jugador
                             window.globalPlayerPhotos[`${team}_${player}`] = photoUrl;
                         }
                     }
@@ -604,9 +612,9 @@
             const finalUrl = window.formatDriveUrl(logoUrl);
             const teamLogoHtml = finalUrl ? `<img src="${finalUrl}" class="w-12 h-12 object-contain drop-shadow-[0_0_8px_rgba(255,255,255,0.2)]" />` : '';
 
-            // Si tiene foto la ponemos en pantalla completa dentro del circulo, si no ponemos el icono de usuario gris
+            // IMPORTANTE: Se agregó referrerpolicy="no-referrer" al img de Google Drive para evitar bloqueos
             const playerAvatarHtml = playerPhotoFinal
-                ? `<img src="${playerPhotoFinal}" class="w-full h-full object-cover" onerror="this.outerHTML='<svg xmlns=\\'http://www.w3.org/2000/svg\\' width=\\'48\\' height=\\'48\\' viewBox=\\'0 0 24 24\\' fill=\\'none\\' stroke=\\'currentColor\\' stroke-width=\\'1.5\\' stroke-linecap=\\'round\\' stroke-linejoin=\\'round\\' class=\\'text-slate-500\\'><path d=\\'M18 20a6 6 0 0 0-12 0\\'/><circle cx=\\'12\\' cy=\\'10\\' r=\\'4\\'/><circle cx=\\'12\\' cy=\\'12\\' r=\\'10\\'/></svg>'"/>`
+                ? `<img src="${playerPhotoFinal}" referrerpolicy="no-referrer" class="w-full h-full object-cover" onerror="this.outerHTML='<svg xmlns=\\'http://www.w3.org/2000/svg\\' width=\\'48\\' height=\\'48\\' viewBox=\\'0 0 24 24\\' fill=\\'none\\' stroke=\\'currentColor\\' stroke-width=\\'1.5\\' stroke-linecap=\\'round\\' stroke-linejoin=\\'round\\' class=\\'text-slate-500\\'><path d=\\'M18 20a6 6 0 0 0-12 0\\'/><circle cx=\\'12\\' cy=\\'10\\' r=\\'4\\'/><circle cx=\\'12\\' cy=\\'12\\' r=\\'10\\'/></svg>'"/>`
                 : `<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="text-slate-500"><path d="M18 20a6 6 0 0 0-12 0"/><circle cx="12" cy="10" r="4"/><circle cx="12" cy="12" r="10"/></svg>`;
 
             const getStat = (keys) => {
@@ -653,7 +661,7 @@
                         <div class="w-32 h-32 rounded-full bg-slate-800 border-[5px] border-[#0f172a] ring-2 ring-pega-gold shadow-2xl flex items-center justify-center overflow-hidden relative z-10">
                             ${playerAvatarHtml}
                         </div>
-                        <button onclick="window.openPlayerForm('${playerName.replace(/'/g, "\\'")}', '${teamName.replace(/'/g, "\\'")}', '${groupName.replace(/'/g, "\\'")}')" class="absolute bottom-0 right-0 bg-pega-gold p-3 rounded-full shadow-[0_0_15px_rgba(251,191,36,0.6)] hover:scale-110 transition border-4 border-[#0f172a] z-20" title="Subir Foto del Jugador">
+                        <button onclick="window.openPlayerForm('${playerName.replace(/'/g, "\\'").replace(/"/g, "&quot;")}', '${teamName.replace(/'/g, "\\'").replace(/"/g, "&quot;")}', '${groupName.replace(/'/g, "\\'").replace(/"/g, "&quot;")}')" class="absolute bottom-0 right-0 bg-pega-gold p-3 rounded-full shadow-[0_0_15px_rgba(251,191,36,0.6)] hover:scale-110 transition border-4 border-[#0f172a] z-20" title="Subir Foto del Jugador">
                             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0f172a" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>
                         </button>
                     </div>
@@ -770,10 +778,27 @@
         };
 
         window.loadCurrentTab = async function(forceRefresh = false) {
-            const container = document.getElementById('data-container'); const loader = document.getElementById('loader'); const activeTab = window.TABS.find(t => t.id === window.currentTabId);
+            const activeTab = window.TABS.find(t => t.id === window.currentTabId);
+            
+            if (!activeTab) {
+                if (forceRefresh) {
+                    window.showToast("Sincronizando base de datos...", "info");
+                    window.loadPlayerPhotos(true);
+                    window.buildGlobalRegistry();
+                }
+                return;
+            }
+
+            const container = document.getElementById('data-container'); const loader = document.getElementById('loader'); 
             container.innerHTML = ''; loader.style.display = 'block'; document.getElementById('analysis-result').classList.add('hidden'); 
             const recentResultsContainer = document.getElementById('recent-results');
+            
             if (activeTab.resultsGid) { recentResultsContainer.classList.remove('hidden'); window.loadRecentResults(forceRefresh); } else { recentResultsContainer.classList.add('hidden'); }
+            
+            if (forceRefresh) {
+                window.loadPlayerPhotos(true);
+            }
+
             try {
                 let rows = window.parseCSV(await window.fetchWithCache(`${window.BASE_SHEET_URL}?gid=${activeTab.gid}&single=true&output=csv`, forceRefresh));
                 if (activeTab.type === 'leader') { window.renderGroupedLeaderBoard(window.processLeaderData(rows.slice(0, 45), activeTab), activeTab); } 
@@ -792,14 +817,19 @@
         window.loadRecentResults = async function(forceRefresh = false) {
             const scroller = document.getElementById('results-scroller'); scroller.innerHTML = `<div class="text-white text-xs p-4"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4 animate-spin"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg></div>`;
             try {
-                const resultsGid = window.TABS.find(t => t.id === window.currentTabId).resultsGid; if (!resultsGid) return; 
+                const activeTab = window.TABS.find(t => t.id === window.currentTabId);
+                if (!activeTab || !activeTab.resultsGid) {
+                    scroller.innerHTML = '';
+                    return;
+                }
+                const resultsGid = activeTab.resultsGid; 
                 const last5 = window.parseCSV(await window.fetchWithCache(`${window.BASE_RESULTS_SHEET_URL}?gid=${resultsGid}&single=true&output=csv`, forceRefresh)).filter(r => r[0] && r[0].trim() !== "").slice(-5).reverse(); 
                 
                 scroller.innerHTML = last5.map(match => {
                     const [teamA, scoreA, scoreB, teamB] = match;
                     const urlA = window.formatDriveUrl((window.globalTeamRegistry[teamA.toUpperCase()] || {}).logo); const urlB = window.formatDriveUrl((window.globalTeamRegistry[teamB.toUpperCase()] || {}).logo);
-                    const logoA = urlA ? `<img src="${urlA}" class="w-8 h-8 md:w-10 md:h-10 object-contain drop-shadow" onerror="window.handleImageError(this, '${teamA}')">` : window.createAvatarHtml(teamA, "w-8 h-8 md:w-10 md:h-10");
-                    const logoB = urlB ? `<img src="${urlB}" class="w-8 h-8 md:w-10 md:h-10 object-contain drop-shadow" onerror="window.handleImageError(this, '${teamB}')">` : window.createAvatarHtml(teamB, "w-8 h-8 md:w-10 md:h-10");
+                    const logoA = urlA ? `<img src="${urlA}" class="w-8 h-8 md:w-10 md:h-10 object-contain drop-shadow" onerror="window.handleImageError(this, '${teamA.replace(/'/g, "\\'").replace(/"/g, "&quot;")}')">` : window.createAvatarHtml(teamA, "w-8 h-8 md:w-10 md:h-10");
+                    const logoB = urlB ? `<img src="${urlB}" class="w-8 h-8 md:w-10 md:h-10 object-contain drop-shadow" onerror="window.handleImageError(this, '${teamB.replace(/'/g, "\\'").replace(/"/g, "&quot;")}')">` : window.createAvatarHtml(teamB, "w-8 h-8 md:w-10 md:h-10");
                     return `
                         <div class="mlb-card bg-[#0f172a]/95 p-3 md:p-4 rounded-xl min-w-[300px] md:min-w-[340px] border border-white/10 shadow-lg transform hover:-translate-y-1 transition duration-300 group">
                             <div class="flex items-center justify-between gap-1 md:gap-2">
@@ -871,8 +901,8 @@
                 const pos = row[0]; let rowClass = 'hover:bg-white/5 transition text-center font-medium text-slate-300'; let posBadge = 'bg-slate-700 text-slate-300';
                 if(pos==1) { posBadge='gold-gradient text-black shadow-[0_0_10px_rgba(251,191,36,0.5)]'; rowClass += ' bg-yellow-500/5'; } if(pos==2) posBadge='silver-gradient text-black'; if(pos==3) posBadge='bronze-gradient text-white';
                 const teamName = row[2] || '-'; const rawLogoUrl = row[1]; const finalUrl = window.formatDriveUrl(rawLogoUrl);
-                let logoHtml = finalUrl ? `<img src="${finalUrl}" class="w-8 h-8 md:w-12 md:h-12 object-contain flex-shrink-0 drop-shadow" referrerpolicy="no-referrer" onerror="window.handleImageError(this, '${teamName.replace(/'/g, "\\'")}')">` : window.createAvatarHtml(teamName, "w-8 h-8 md:w-12 md:h-12 flex-shrink-0");
-                return `<tr class="${rowClass}"><td class="sticky-col px-2 py-2 min-w-[200px] md:min-w-[300px]"><div class="flex items-center gap-2 md:gap-3"><span class="inline-flex w-5 h-5 md:w-7 md:h-7 rounded items-center justify-center text-[10px] md:text-sm font-black flex-shrink-0 ${posBadge}">${pos}</span>${logoHtml}<div onclick="window.openTeamResults('${teamName.replace(/'/g, "\\'")}', '${activeTab.resultsGid}', '${rawLogoUrl}')" class="cursor-pointer hover:text-pega-gold transition-colors font-sport font-bold text-white text-base md:text-2xl tracking-wide uppercase truncate leading-none pt-1" title="Ver Estadísticas del Equipo">${teamName}</div></div></td><td class="px-2 py-3 text-center text-xs md:text-base font-bold text-slate-200">${row[3]||'-'}</td><td class="px-2 py-3 text-center text-xs md:text-base font-black text-green-400">${row[4]||'-'}</td><td class="px-2 py-3 text-center text-xs md:text-base font-bold text-slate-300">${row[5]||'-'}</td><td class="px-2 py-3 text-center text-xs md:text-base font-black text-red-400">${row[6]||'-'}</td><td class="px-2 py-3 text-center text-xs md:text-sm text-slate-400">${row[7]||'-'}</td><td class="px-2 py-3 text-center text-xs md:text-sm text-slate-400">${row[8]||'-'}</td><td class="px-2 py-3 text-center"><span class="font-bold text-white text-[11px] md:text-sm tracking-widest bg-white/10 rounded px-2 py-1">${row[9]||'-'}</span></td></tr>`;
+                let logoHtml = finalUrl ? `<img src="${finalUrl}" class="w-8 h-8 md:w-12 md:h-12 object-contain flex-shrink-0 drop-shadow" referrerpolicy="no-referrer" onerror="window.handleImageError(this, '${teamName.replace(/'/g, "\\'").replace(/"/g, "&quot;")}')">` : window.createAvatarHtml(teamName, "w-8 h-8 md:w-12 md:h-12 flex-shrink-0");
+                return `<tr class="${rowClass}"><td class="sticky-col px-2 py-2 min-w-[200px] md:min-w-[300px]"><div class="flex items-center gap-2 md:gap-3"><span class="inline-flex w-5 h-5 md:w-7 md:h-7 rounded items-center justify-center text-[10px] md:text-sm font-black flex-shrink-0 ${posBadge}">${pos}</span>${logoHtml}<div onclick="window.openTeamResults('${teamName.replace(/'/g, "\\'").replace(/"/g, "&quot;")}', '${activeTab.resultsGid}', '${rawLogoUrl}')" class="cursor-pointer hover:text-pega-gold transition-colors font-sport font-bold text-white text-base md:text-2xl tracking-wide uppercase truncate leading-none pt-1" title="Ver Estadísticas del Equipo">${teamName}</div></div></td><td class="px-2 py-3 text-center text-xs md:text-base font-bold text-slate-200">${row[3]||'-'}</td><td class="px-2 py-3 text-center text-xs md:text-base font-black text-green-400">${row[4]||'-'}</td><td class="px-2 py-3 text-center text-xs md:text-base font-bold text-slate-300">${row[5]||'-'}</td><td class="px-2 py-3 text-center text-xs md:text-base font-black text-red-400">${row[6]||'-'}</td><td class="px-2 py-3 text-center text-xs md:text-sm text-slate-400">${row[7]||'-'}</td><td class="px-2 py-3 text-center text-xs md:text-sm text-slate-400">${row[8]||'-'}</td><td class="px-2 py-3 text-center"><span class="font-bold text-white text-[11px] md:text-sm tracking-widest bg-white/10 rounded px-2 py-1">${row[9]||'-'}</span></td></tr>`;
             }).join('')}</tbody></table></div></div>`;
         };
 
@@ -920,7 +950,7 @@
                     
                     // Cargamos las fotos y logos con retraso para no bloquear Google Sheets
                     setTimeout(() => {
-                        window.loadPlayerPhotos();
+                        window.loadPlayerPhotos(true); // Forzamos carga inicial limpia
                         window.buildGlobalRegistry(); 
                     }, 1000);
 
